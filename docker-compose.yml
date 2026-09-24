@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentinel-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./dummy-production/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel} -d ${POSTGRES_DB:-sentinel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  payment-service:
+    build:
+      context: ./dummy-production/payment-service
+    container_name: sentinel-payment-service
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  order-service:
+    build:
+      context: ./dummy-production/order-service
+    container_name: sentinel-order-service
+    ports:
+      - "3001:3001"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-sentinel}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-sentinel}
+      - POSTGRES_DB=${POSTGRES_DB:-sentinel}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: ./dummy-production/api-gateway
+    container_name: sentinel-api-gateway
+    ports:
+      - "3002:3002"
+    environment:
+      - PAYMENT_SERVICE_URL=http://payment-service:3000
+      - ORDER_SERVICE_URL=http://order-service:3001
+    depends_on:
+      - payment-service
+      - order-service
+
+volumes:
+  postgres_data:
+  redis_data:
