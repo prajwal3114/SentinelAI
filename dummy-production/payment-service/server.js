@@ -35,8 +35,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Redis client setup — commandsQueueMaxLength:0 makes commands fail immediately
-// when disconnected instead of queuing indefinitely (prevents health endpoint hangs)
+// Redis client setup.
+// reconnectStrategy keeps the client alive so it recovers when Redis comes back.
+// commandsQueueMaxLength: 0 is kept but is insufficient during reconnect cycles —
+// the isReady guard + withTimeout below are the real protection.
 const redisClient = redis.createClient({
   url: process.env.REDIS_URL || 'redis://redis:6379',
   socket: {
@@ -49,29 +51,57 @@ const redisClient = redis.createClient({
 redisClient.on('error', (err) => console.error('[payment-service] Redis error:', err.message));
 redisClient.connect().catch((err) => console.error('[payment-service] Redis initial connect failed:', err.message));
 
+/**
+ * Wrap a Redis command promise with a hard timeout.
+ *
+ * WHY: When the redis v4 client is in reconnect mode (isOpen=true, isReady=false),
+ * issuing a command enqueues it in an internal offline queue and the returned
+ * promise NEVER settles — commandsQueueMaxLength:0 does NOT prevent this during
+ * reconnect cycles. The timeout ensures the request always returns within
+ * REDIS_COMMAND_TIMEOUT_MS regardless.
+ */
+const REDIS_COMMAND_TIMEOUT_MS = 1500;
+
+function withTimeout(promise, ms) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Redis command timed out after ${ms}ms`)), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
+
 app.get('/health', async (req, res) => {
+  // Fast-fail: if client is clearly not ready, skip the command entirely
+  if (!redisClient.isReady) {
+    return res.status(503).json({ status: 'DOWN', service: 'payment-service', redis: 'DOWN', error: 'Redis not connected' });
+  }
   try {
-    await redisClient.ping();
+    await withTimeout(redisClient.ping(), REDIS_COMMAND_TIMEOUT_MS);
     res.status(200).json({ status: 'UP', service: 'payment-service', redis: 'UP' });
   } catch (error) {
-    console.error('Healthcheck failed: Redis is unavailable', error);
-    res.status(503).json({ status: 'DOWN', service: 'payment-service', redis: 'DOWN', error: error.message });
+    console.error('[payment-service] Healthcheck failed: Redis is unavailable:', error.message);
+    res.status(503).json({ status: 'DOWN', service: 'payment-service', redis: 'DOWN', error: 'Redis unavailable' });
   }
 });
 
 app.get('/payments', async (req, res) => {
+  // Fast-fail: if client is clearly not ready, skip the command entirely
+  if (!redisClient.isReady) {
+    console.error('[payment-service] /payments: Redis not ready, failing fast');
+    return res.status(503).json({ error: 'Payment service dependency unavailable' });
+  }
   try {
-    // Perform a Redis operation
-    const count = await redisClient.incr('payment_requests');
-    res.status(200).json({ 
-      success: true, 
-      message: 'Payment processed successfully', 
+    // withTimeout guards against Redis becoming unavailable between the isReady
+    // check above and actual command execution (race condition window).
+    const count = await withTimeout(redisClient.incr('payment_requests'), REDIS_COMMAND_TIMEOUT_MS);
+    res.status(200).json({
+      success: true,
+      message: 'Payment processed successfully',
       paymentId: `PAY-${Date.now()}`,
-      totalPaymentsProcessed: count 
+      totalPaymentsProcessed: count
     });
   } catch (error) {
-    console.error('Payment processing failed due to Redis error', error);
-    res.status(500).json({ success: false, error: 'Internal Server Error: Failed to process payment' });
+    console.error('[payment-service] Payment processing failed due to Redis error:', error.message);
+    res.status(500).json({ error: 'Payment service dependency unavailable' });
   }
 });
 
