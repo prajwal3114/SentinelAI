@@ -81,7 +81,17 @@ services:
     depends_on:
       - payment-service
       - order-service
+  loki:
+    image: grafana/loki:latest
+    container_name: sentinel-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./telemetry-config/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
 
 volumes:
   postgres_data:
   redis_data:
+  loki-data:
