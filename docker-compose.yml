@@ -91,6 +91,17 @@ services:
       - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
 
+  promtail:
+    image: grafana/promtail:latest
+    container_name: sentinel-promtail
+    volumes:
+      - ./telemetry-config/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+    command: -config.file=/etc/promtail/config.yml
+
+    depends_on:
+      - loki
 volumes:
   postgres_data:
   redis_data:
