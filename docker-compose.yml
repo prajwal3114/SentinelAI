@@ -102,7 +102,22 @@ services:
 
     depends_on:
       - loki
+
+  telemetry-engine:
+    build:
+      context: ./backend
+    container_name: sentinel-telemetry-engine
+    ports:
+      - "4000:4000"
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+    depends_on:
+      - prometheus
+      - loki
+
 volumes:
   postgres_data:
   redis_data:
   loki-data:
+

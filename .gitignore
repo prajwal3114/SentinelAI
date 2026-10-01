@@ -26,9 +26,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-store/
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
+# Note: lock files (package-lock.json, etc.) are NOT ignored as they should be committed for reproducible builds
 .npm/
 .yarn/
 
